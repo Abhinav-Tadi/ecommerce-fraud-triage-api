@@ -6,3 +6,6 @@ data/
 *.csv
 .env
 .DS_Store
+.DS_Store
+.Rhistory
+*.DS_Store
