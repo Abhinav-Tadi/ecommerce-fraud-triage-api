@@ -1,6 +1,6 @@
 # ecommerce-fraud-triage-api
 
-> **Status: In progress — Phase 1 (EDA and model training). Live demo and public endpoint will be linked here once deployment is complete.**
+> **Status: Status: In progress — Phase 2 (API packaging and containerisation). Live demo and public endpoint will be linked here once deployment is complete.**
 
 ---
 
@@ -41,14 +41,14 @@ Inference runs entirely on AWS. The Streamlit frontend is hosted on Streamlit Co
 | Component | Status | Notes |
 |---|---|---|
 | Problem & dataset selection | ✅ Done | IEEE-CIS Fraud Detection; see `DECISIONS.md` |
-| EDA & feature engineering | 🔲 In progress | `notebooks/01_eda.ipynb` |
-| Leakage audit | 🔲 In progress | Part of EDA phase |
-| Baseline model (logistic regression) | 🔲 Planned | Required comparison point for model justification |
-| XGBoost classifier | 🔲 Planned | `RandomizedSearchCV` tuning; evaluated on PR-AUC |
-| `scripts/preprocess.py` | 🔲 Planned | Reused at both training time and inference time |
-| FastAPI inference endpoint | 🔲 Planned | `/predict` + `/health` |
-| Docker containerisation | 🔲 Planned | Targets `public.ecr.aws/lambda/python:3.11` directly |
-| AWS billing alert + IAM user | 🔲 Planned | Phase 3 — set before any cloud resource is created |
+| EDA & feature engineering | ✅ Done | `notebooks/01_eda.ipynb` |
+| Leakage audit | ✅ Done | Part of EDA phase |
+| Baseline model (logistic regression) | ✅ Done | Required comparison point for model justification |
+| XGBoost classifier | ✅ Done | `RandomizedSearchCV` tuning; evaluated on PR-AUC |
+| `scripts/preprocess.py` | ✅ Done | Reused at both training time and inference time |
+| FastAPI inference endpoint | ✅ Done | `/predict` + `/health` |
+| Docker containerisation | 🔲 In Progress | Targets `public.ecr.aws/lambda/python:3.11` directly |
+| AWS billing alert + IAM user | ✅ Done | Set before any cloud resource is created |
 | ECR image push | 🔲 Planned | Phase 4 |
 | Lambda function (container image) | 🔲 Planned | Phase 4 |
 | API Gateway HTTP API | 🔲 Planned | Phase 4 |
@@ -81,7 +81,7 @@ Keeps the model artifact in the tens-of-MB range, avoids Lambda cold-start pain 
 ## Run Locally
 
 ```bash
-git clone https://github.com/<your-username>/ecommerce-fraud-triage-api.git
+git clone https://github.com/Abhinav-Tadi/ecommerce-fraud-triage-api.git
 cd ecommerce-fraud-triage-api
 
 python3 -m venv venv
