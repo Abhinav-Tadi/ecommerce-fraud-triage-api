@@ -1,22 +1,22 @@
 # ecommerce-fraud-triage-api
 
-> **Status: Status: In progress — Phase 2 (API packaging and containerisation). Live demo and public endpoint will be linked here once deployment is complete.**
+> **Status: Phases 1–3 complete (model training, API packaging, AWS account setup). Phase 4 — cloud deployment — is next. Live endpoint and demo will be linked here once it's running.**
 
 ---
 
 ## What This Is
 
-A real-time fraud triage service for card-not-present e-commerce transactions. Given a transaction's features, the API returns a binary flag (review / pass) and a calibrated probability score.
+Real-time fraud triage for card-not-present e-commerce transactions. Send a transaction's features, get back a binary flag (review or pass) and a probability score.
 
-Built on the [IEEE-CIS Fraud Detection dataset](https://www.kaggle.com/c/ieee-fraud-detection) (Vesta Corporation via Kaggle, 2019): ~590,540 labeled transactions, 431 raw features across two joined tables, 3.5% fraud rate.
+Built on the [IEEE-CIS Fraud Detection dataset](https://www.kaggle.com/c/ieee-fraud-detection) from Vesta Corporation — ~590K real transactions, 3.5% fraud rate, two joined tables with genuinely messy features.
 
-The output is framed as a **triage decision**, not a raw score. The classification threshold reflects the asymmetric cost of a missed fraud case versus the operational cost of a false-positive review — a business tradeoff, not a default 0.5 cutoff. See [Design Decisions](#design-decisions).
+The threshold isn't 0.5. It's set at 0.0957 to hit 85% recall, which reflects what a missed fraud actually costs versus the cost of a false-positive review. The reasoning is in [DECISIONS.md](./DECISIONS.md).
 
 ---
 
 ## Live Demo
 
-> Not yet deployed. Link will appear here once Phase 4 (cloud deployment) is complete.
+Not live yet — link will appear here once Phase 4 is done.
 
 ---
 
@@ -26,55 +26,56 @@ The output is framed as a **triage decision**, not a raw score. The classificati
 flowchart LR
     A["Streamlit Demo\n(Streamlit Community Cloud)"] -->|HTTPS POST| B["API Gateway\nHTTP API"]
     B --> C["Lambda\nDocker container via ECR"]
-    C --> D["XGBoost model\nmodel.joblib"]
+    C --> D["XGBoost model\nmodel.ubj"]
     C --> E["CloudWatch Logs"]
     C --> F["DynamoDB\nprediction log"]
     G["S3 bucket"] -.->|model artifact versioning| C
 ```
 
-Inference runs entirely on AWS. The Streamlit frontend is hosted on Streamlit Community Cloud — deliberately separate to remove any AWS cost from the UI layer. See [Design Decisions](#design-decisions) for why Lambda + API Gateway over EC2 or SageMaker.
+Inference runs on AWS. The Streamlit frontend runs on Streamlit Community Cloud — keeping it off AWS entirely removes any billing risk from the UI layer.
 
 ---
 
-## Implementation Status
+## Build Status
 
 | Component | Status | Notes |
 |---|---|---|
-| Problem & dataset selection | ✅ Done | IEEE-CIS Fraud Detection; see `DECISIONS.md` |
-| EDA & feature engineering | ✅ Done | `notebooks/01_eda.ipynb` |
-| Leakage audit | ✅ Done | Part of EDA phase |
-| Baseline model (logistic regression) | ✅ Done | Required comparison point for model justification |
-| XGBoost classifier | ✅ Done | `RandomizedSearchCV` tuning; evaluated on PR-AUC |
-| `scripts/preprocess.py` | ✅ Done | Reused at both training time and inference time |
-| FastAPI inference endpoint | ✅ Done | `/predict` + `/health` |
-| Docker containerisation | 🔲 In Progress | Targets `public.ecr.aws/lambda/python:3.11` directly |
-| AWS billing alert + IAM user | ✅ Done | Set before any cloud resource is created |
-| ECR image push | 🔲 Planned | Phase 4 |
-| Lambda function (container image) | 🔲 Planned | Phase 4 |
-| API Gateway HTTP API | 🔲 Planned | Phase 4 |
-| S3 model artifact storage | 🔲 Planned | Phase 4 |
-| Streamlit demo | 🔲 Planned | Phase 5; hosted on Streamlit Community Cloud |
-| DynamoDB prediction logging | 🔲 Planned | Phase 7 |
-| GitHub Actions CI/CD | 🔲 Stretch goal | Phase 6; redeploys Lambda on push to `main` |
-| Automated drift detection | ❌ Not built | See `DECISIONS.md` — what I'd build next and why |
+| Problem & dataset selection | ✅ Done | IEEE-CIS Fraud Detection; see DECISIONS.md |
+| EDA & feature engineering | ✅ Done | notebooks/01_eda.ipynb |
+| Leakage audit | ✅ Done | Run during EDA; TransactionID and time-index confirmed clean |
+| Baseline model (logistic regression) | ✅ Done | PR-AUC 0.4393 |
+| XGBoost classifier | ✅ Done | PR-AUC 0.8691, 422 features, threshold 0.0957 |
+| scripts/preprocess.py | ✅ Done | Same code path used at training time and inference time |
+| FastAPI inference endpoint | ✅ Done | /predict + /health; 4/4 curl tests passing locally |
+| Docker containerisation | ✅ Done | Python 3.12 base image; tested with Lambda v2 event format locally |
+| AWS billing alert (Phase 3) | ✅ Done | $1 budget alert configured before any resource was created |
+| IAM user — abhinavtadi-dev (Phase 3) | ✅ Done | Scoped policies; root account not used for anything |
+| ECR image push | 🔲 Phase 4 | |
+| Lambda function | 🔲 Phase 4 | Must use --architectures arm64 — see DECISIONS.md |
+| API Gateway HTTP API | 🔲 Phase 4 | |
+| S3 model artifact storage | 🔲 Phase 4 | |
+| Streamlit demo | 🔲 Phase 5 | Hosting on Streamlit Community Cloud, not AWS |
+| DynamoDB prediction logging | 🔲 Phase 7 | |
+| GitHub Actions CI/CD | 🔲 Stretch goal | Redeploys Lambda on push to main |
+| Automated drift detection | ❌ Not built | Design is documented in DECISIONS.md |
 
 ---
 
-## Design Decisions
+## Key Design Decisions
 
-Full reasoning in [`DECISIONS.md`](./DECISIONS.md). Key choices summarised:
+Full reasoning in [DECISIONS.md](./DECISIONS.md). Short version:
 
 **Dataset — IEEE-CIS over ULB or PaySim**
-ULB features are pre-PCA-transformed: no interpretable inputs, no real engineering decisions, demo is meaningless. PaySim is synthetic simulator output — fails the real-world data requirement. IEEE-CIS is real, genuinely messy (hundreds of sparse columns, a two-table join with partial identity coverage), and includes interpretable fields (transaction amount, card network, device type, email domain) that make a business-framed demo possible.
+ULB is already PCA-transformed. The inputs are anonymous components, not transaction fields, which makes a real inference API pointless — you can't build a business-framed demo when you can't explain what the features mean. PaySim is synthetic. IEEE-CIS has real transactions with interpretable fields and a genuinely annoying join problem (75.6% of transactions have no matching identity record at all). That messiness is what makes it worth working through.
 
-**Evaluation metric — PR-AUC and F1 on the minority class, not accuracy**
-At 3.5% fraud rate, predicting "not fraud" on everything scores 96.5% accuracy. Precision and recall on the fraud class are the only metrics that say anything useful about model performance on the task that matters.
+**Evaluation metric — PR-AUC, not accuracy**
+At 3.5% fraud rate, predicting "not fraud" every single time gets you 96.5% accuracy. Precision and recall on the fraud class are the only numbers that say anything useful here.
 
-**Lambda + API Gateway over EC2 or SageMaker**
-AWS free-tier accounts created post-mid-2025 receive a credit balance (~$100–200) that expires after six months. EC2 and SageMaker draw down that balance. Lambda, API Gateway, DynamoDB, and S3 sit on AWS's permanent Always Free allowances — this architecture keeps the project live indefinitely after the credits expire, not just for six months.
+**Lambda over EC2**
+AWS accounts created after mid-2025 get a credit balance that expires after six months. EC2 draws it down. Lambda, API Gateway, DynamoDB, and S3 all sit on AWS's permanent Always Free tier. The project stays live indefinitely.
 
-**Classical ML (XGBoost) over deep learning**
-Keeps the model artifact in the tens-of-MB range, avoids Lambda cold-start pain from loading large models, and requires real feature engineering decisions rather than delegating representation learning to a network.
+**XGBoost over deep learning**
+41MB artifact, native NaN handling, no GPU needed. A deep learning model would have tripled cold-start latency and required GPU infrastructure for no meaningful accuracy gain on a tabular dataset this size.
 
 ---
 
@@ -85,42 +86,53 @@ git clone https://github.com/Abhinav-Tadi/ecommerce-fraud-triage-api.git
 cd ecommerce-fraud-triage-api
 
 python3 -m venv venv
-source venv/bin/activate  # Windows: venv\Scripts\activate
+source venv/bin/activate
 
 pip install -r requirements-dev.txt
 
-# Run the API server (after Phase 2 — model and app are built):
 uvicorn app.main:app --reload --port 8000
-
-# Predict endpoint:
-curl -X POST http://localhost:8000/predict \
-  -H "Content-Type: application/json" \
-  -d '{"TransactionAmt": 150.0, "ProductCD": "W", "card4": "visa", ...}'
-
-# Health check:
-curl http://localhost:8000/health
 ```
 
-> Full feature schema is documented in `app/schema.py`, added in Phase 2. The dataset must be downloaded separately from Kaggle — it is not included in this repository.
+Test it:
+
+```bash
+# Minimal valid request (TransactionAmt is the only required field)
+curl -X POST http://localhost:8000/predict \
+  -H "Content-Type: application/json" \
+  -d '{"TransactionAmt": 150.0}'
+
+# With card and product fields
+curl -X POST http://localhost:8000/predict \
+  -H "Content-Type: application/json" \
+  -d '{"TransactionAmt": 500.0, "ProductCD": "C", "card4": "discover", "card6": "credit", "P_emaildomain": "anonymous.com"}'
+
+# Health check
+curl http://localhost:8000/health
+
+# Should return 422 — TransactionAmt is missing
+curl -X POST http://localhost:8000/predict \
+  -H "Content-Type: application/json" \
+  -d '{"card4": "visa"}'
+```
+
+The dataset isn't in this repo — download from [Kaggle](https://www.kaggle.com/c/ieee-fraud-detection) and place in `data/` to re-run training.
 
 ---
 
-## What I'd Build Next
+## What I'd Do Next
 
-1. **Automated drift detection** — a scheduled Lambda that runs weekly, compares the distribution of logged prediction inputs against the training distribution (TransactionAmt, device type, card network), and alerts on statistically significant shift. Currently not built; the architecture for it is documented in `DECISIONS.md`.
-2. **Least-privilege IAM** — current IAM policies are broader than necessary for simplicity. A production version would scope permissions to exactly what each service requires.
-3. **Infrastructure as code** — current deployment uses AWS Console + CLI. Terraform or CloudFormation would make the setup reproducible, reviewable, and transferable.
+- **Drift detection** — a scheduled Lambda comparing the last 7 days of logged inputs against the training distribution. Not built; the design is in DECISIONS.md.
+- **Least-privilege IAM** — current policies are broader than they need to be. Fine for a portfolio project, would tighten before anything touched production.
+- **Infrastructure as code** — the Phase 4 deployment is CLI-based. Terraform would make it reproducible and version-controlled.
 
 ---
 
 ## Tech Stack
 
-Python · XGBoost · scikit-learn · FastAPI · Pydantic · Docker · AWS Lambda · ECR · API Gateway · S3 · DynamoDB · CloudWatch · Streamlit · GitHub Actions (planned)
+Python · XGBoost · scikit-learn · FastAPI · Pydantic · Docker · AWS Lambda · ECR · API Gateway · S3 · DynamoDB · CloudWatch · Streamlit
 
 ---
 
 ## Dataset
 
-IEEE-CIS Fraud Detection — [kaggle.com/c/ieee-fraud-detection](https://www.kaggle.com/c/ieee-fraud-detection)
-~590,540 transactions · 431 features (train_transaction + train_identity join) · 3.5% fraud rate
-Provided by Vesta Corporation via the IEEE Computational Intelligence Society.
+[IEEE-CIS Fraud Detection](https://www.kaggle.com/c/ieee-fraud-detection) — Vesta Corporation via Kaggle, 2019. ~590,540 transactions, 3.5% fraud rate.
