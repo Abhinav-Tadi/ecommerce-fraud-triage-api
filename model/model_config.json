@@ -7,7 +7,7 @@
   "baseline_pr_auc": 0.43926800239150193,
   "best_iteration": 9987,
   "scale_pos_weight": 27.580278281911674,
-  "model_size_mb": 41.4,
+  "model_size_mb": 41.3,
   "n_features": 422,
   "feature_cols": [
     "TransactionAmt",
