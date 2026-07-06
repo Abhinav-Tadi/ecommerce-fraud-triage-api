@@ -9,4 +9,5 @@ jupyterlab==4.2.0
 joblib==1.4.0
 fastapi==0.115.0
 uvicorn==0.30.0
-mangum==0.17.0
+mangum==0.17.0pytest==8.3.3
+pytest==9.1.1

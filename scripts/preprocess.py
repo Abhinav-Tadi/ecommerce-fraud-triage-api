@@ -28,6 +28,27 @@ with open(_CONFIG_PATH) as f:
 with open(_MAPS_PATH) as f:
     _CATEGORY_MAPS = json.load(f)
 
+# Columns excluded from case-insensitive matching: raw values collide when
+# lowercased (confirmed for DeviceInfo — 1786 raw values, 1779 unique once
+# lowercased). Case-sensitive exact match only, identical to pre-fix
+# behavior. If a future retrain trips this guard on a DIFFERENT column,
+# add it here — do not silently auto-catch it and move on.
+_CASE_SENSITIVE_COLUMNS = {"DeviceInfo"}
+
+_CATEGORY_MAPS_CI: dict = {}
+for _col, _mapping in _CATEGORY_MAPS.items():
+    if _col in _CASE_SENSITIVE_COLUMNS:
+        continue
+    _ci = {k.lower(): v for k, v in _mapping.items()}
+    if len(_ci) != len(_mapping):
+        raise RuntimeError(
+            f"Lowercasing category map for '{_col}' collapsed {len(_mapping)} "
+            f"raw values into {len(_ci)} unique keys — case-insensitive "
+            "matching would silently corrupt this column. Add it to "
+            "_CASE_SENSITIVE_COLUMNS above if this is expected."
+        )
+    _CATEGORY_MAPS_CI[_col] = _ci
+
 FEATURE_COLS = _CONFIG["feature_cols"]   # 422 features, in model-expected order
 
 # Public API
@@ -67,7 +88,22 @@ def preprocess_input(raw: dict) -> pd.DataFrame:
     # 3. Categorical features: apply saved ordinal mappings.
     #    Unseen values (new email domains, new device types) -> NaN.
     #    XGBoost uses its learned default branch direction for NaN.
-    for col, mapping in _CATEGORY_MAPS.items():
+    # 3a. Case-insensitive columns (everything except _CASE_SENSITIVE_COLUMNS).
+    for col, mapping_ci in _CATEGORY_MAPS_CI.items():
+        val = raw.get(col)
+        if val is None:
+            row[col] = np.nan
+        elif isinstance(val, bool):
+            val_str = "t" if val else "f"
+            row[col] = float(mapping_ci[val_str]) if val_str in mapping_ci else np.nan
+        else:
+            val_str = str(val).strip().lower()
+            row[col] = float(mapping_ci[val_str]) if val_str in mapping_ci else np.nan
+
+    # 3b. Case-sensitive exceptions. Exact match only — unchanged from
+    #      the original, pre-fix behavior for these specific columns.
+    for col in _CASE_SENSITIVE_COLUMNS:
+        mapping = _CATEGORY_MAPS[col]
         val = raw.get(col)
         if val is None:
             row[col] = np.nan
