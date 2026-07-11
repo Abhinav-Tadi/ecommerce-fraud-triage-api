@@ -9,3 +9,10 @@ data/
 .DS_Store
 .Rhistory
 *.DS_Store
+.env.deploy
+__pycache__/
+*.pyc
+.pytest_cache/
+response.json
+response.json
+.pytest_cache/
