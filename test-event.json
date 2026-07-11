@@ -1,0 +1,29 @@
+{
+  "version": "2.0",
+  "routeKey": "$default",
+  "rawPath": "/predict",
+  "rawQueryString": "",
+  "headers": {
+    "content-type": "application/json"
+  },
+  "requestContext": {
+    "accountId": "179265444220",
+    "apiId": "manualtest",
+    "domainName": "manualtest.execute-api.us-east-1.amazonaws.com",
+    "domainPrefix": "manualtest",
+    "http": {
+      "method": "POST",
+      "path": "/predict",
+      "protocol": "HTTP/1.1",
+      "sourceIp": "127.0.0.1",
+      "userAgent": "manual-test/1.0"
+    },
+    "requestId": "manual-test-request",
+    "routeKey": "$default",
+    "stage": "$default",
+    "time": "10/Jul/2026:00:00:00 +0000",
+    "timeEpoch": 1752105600
+  },
+  "body": "{\"TransactionAmt\": 150.0}",
+  "isBase64Encoded": false
+}
