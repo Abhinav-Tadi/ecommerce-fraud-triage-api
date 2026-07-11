@@ -100,13 +100,20 @@ def preprocess_input(raw: dict) -> pd.DataFrame:
             val_str = str(val).strip().lower()
             row[col] = float(mapping_ci[val_str]) if val_str in mapping_ci else np.nan
 
-    # 3b. Case-sensitive exceptions. Exact match only — unchanged from
-    #      the original, pre-fix behavior for these specific columns.
+    # 3b. Case-sensitive exceptions. Exact match only, EXCEPT for the bool
+    #     bridge below — a future column that's both case-colliding AND
+    #     boolean-valued would otherwise silently lose bool support with
+    #     nothing to catch it, the same class of gap 3a's fix closed for
+    #     every other column.
     for col in _CASE_SENSITIVE_COLUMNS:
         mapping = _CATEGORY_MAPS[col]
         val = raw.get(col)
         if val is None:
             row[col] = np.nan
+        elif isinstance(val, bool):
+            candidates = ("T", "t") if val else ("F", "f")
+            match = next((c for c in candidates if c in mapping), None)
+            row[col] = float(mapping[match]) if match is not None else np.nan
         else:
             val_str = str(val).strip()
             row[col] = float(mapping[val_str]) if val_str in mapping else np.nan

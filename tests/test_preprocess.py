@@ -98,3 +98,24 @@ def test_only_known_column_has_case_collisions():
         f"longer match _CASE_SENSITIVE_COLUMNS {_CASE_SENSITIVE_COLUMNS} "
         "in preprocess.py. Update the hardcoded set to match."
     )
+
+def test_case_sensitive_column_bool_bridge_tries_both_cases(monkeypatch):
+    """
+    No real column today is both case-colliding and boolean-valued -- the
+    gap flagged when the case-sensitive exclusion shipped. Synthesizes
+    that scenario via monkeypatch, using V1 (normally a plain numeric
+    passthrough) as a stand-in, rather than waiting for some future
+    retrain to produce one for real.
+    """
+    import scripts.preprocess as pp
+
+    fake_mapping = {"T": 1, "F": 0, "SomeOtherValue": 2}
+    monkeypatch.setitem(pp._CATEGORY_MAPS, "V1", fake_mapping)
+    monkeypatch.setattr(pp, "_CASE_SENSITIVE_COLUMNS",
+                         pp._CASE_SENSITIVE_COLUMNS | {"V1"})
+
+    row_true = pp.preprocess_input({"TransactionAmt": 100, "V1": True})
+    row_false = pp.preprocess_input({"TransactionAmt": 100, "V1": False})
+
+    assert row_true["V1"].iloc[0] == 1.0
+    assert row_false["V1"].iloc[0] == 0.0
