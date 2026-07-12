@@ -3,7 +3,6 @@
 ---
 
 ## Problem & Dataset
-fff
 **Problem:** Predict whether a card-not-present e-commerce transaction is fraudulent, framed as flagging high-risk transactions for manual review rather than emitting a raw probability score.
 
 **Dataset:** IEEE-CIS Fraud Detection (Kaggle, 2019), provided by Vesta Corporation.

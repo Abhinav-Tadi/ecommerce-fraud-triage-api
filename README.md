@@ -5,7 +5,6 @@
 ---
 
 ## What This Is
-fff
 Real-time fraud triage for card-not-present e-commerce transactions. Send a transaction's features, get back a binary flag (review or pass) and a probability score.
 
 Built on the [IEEE-CIS Fraud Detection dataset](https://www.kaggle.com/c/ieee-fraud-detection) from Vesta Corporation — ~590K real transactions, 3.5% fraud rate, two joined tables with genuinely messy features.
