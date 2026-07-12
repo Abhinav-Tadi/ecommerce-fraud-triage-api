@@ -1,11 +1,11 @@
 # ecommerce-fraud-triage-api
 
-> **Status: Phases 1–3 complete (model training, API packaging, AWS account setup). Phase 4 — cloud deployment — is next. Live endpoint and demo will be linked here once it's running.**
+> **Status: Phases 1–4 complete — model trained, containerized, and deployed to a live AWS Lambda function behind a public API Gateway endpoint. Phase 5 (interactive Streamlit demo) is next.**
 
 ---
 
 ## What This Is
-
+fff
 Real-time fraud triage for card-not-present e-commerce transactions. Send a transaction's features, get back a binary flag (review or pass) and a probability score.
 
 Built on the [IEEE-CIS Fraud Detection dataset](https://www.kaggle.com/c/ieee-fraud-detection) from Vesta Corporation — ~590K real transactions, 3.5% fraud rate, two joined tables with genuinely messy features.
@@ -16,7 +16,16 @@ The threshold isn't 0.5. It's set at 0.0957 to hit 85% recall, which reflects wh
 
 ## Live Demo
 
-Not live yet — link will appear here once Phase 4 is done.
+The interactive Streamlit demo (Phase 5) isn't live yet. The API underneath it is — this is a real, deployed AWS Lambda function behind API Gateway, not a placeholder:
+
+```
+POST https://8456ksu3u8.execute-api.us-east-1.amazonaws.com/predict
+Content-Type: application/json
+
+{"TransactionAmt": 150.0}
+```
+
+See "Test the Live Endpoint" below for copy-pasteable examples, including a deliberately malformed request.
 
 ---
 
@@ -25,10 +34,10 @@ Not live yet — link will appear here once Phase 4 is done.
 ```mermaid
 flowchart LR
     A["Streamlit Demo\n(Streamlit Community Cloud)"] -->|HTTPS POST| B["API Gateway\nHTTP API"]
-    B --> C["Lambda\nDocker container via ECR"]
+    B --> C["Lambda - Docker container"]
     C --> D["XGBoost model\nmodel.ubj"]
     C --> E["CloudWatch Logs"]
-    C --> F["DynamoDB\nprediction log"]
+    C --> F["DynamoDB - prediction log"]
     G["S3 bucket"] -.->|model artifact versioning| C
 ```
 
@@ -45,15 +54,16 @@ Inference runs on AWS. The Streamlit frontend runs on Streamlit Community Cloud 
 | Leakage audit | ✅ Done | Run during EDA; TransactionID and time-index confirmed clean |
 | Baseline model (logistic regression) | ✅ Done | PR-AUC 0.4393 |
 | XGBoost classifier | ✅ Done | PR-AUC 0.8691, 422 features, threshold 0.0957 |
-| scripts/preprocess.py | ✅ Done | Same code path used at training time and inference time |
-| FastAPI inference endpoint | ✅ Done | /predict + /health; 4/4 curl tests passing locally |
-| Docker containerisation | ✅ Done | Python 3.12 base image; tested with Lambda v2 event format locally |
+| scripts/preprocess.py | ✅ Done | Same code path used at training time and inference time; case-insensitive categorical matching hardened pre-deployment — see DECISIONS.md |
+| Test suite (tests/test_preprocess.py) | ✅ Done | 13 tests, pytest; categorical encoding, case sensitivity, schema-level type bridging, and case-sensitive-column bool bridging all covered |
+| FastAPI inference endpoint | ✅ Done | /predict + /health |
+| Docker containerisation | ✅ Done | linux/arm64, Python 3.12 base image; provenance/SBOM disabled for Lambda compatibility — see DECISIONS.md |
 | AWS billing alert (Phase 3) | ✅ Done | $1 budget alert configured before any resource was created |
-| IAM user — abhinavtadi-dev (Phase 3) | ✅ Done | Scoped policies; root account not used for anything |
-| ECR image push | 🔲 Phase 4 | |
-| Lambda function | 🔲 Phase 4 | Must use --architectures arm64 — see DECISIONS.md |
-| API Gateway HTTP API | 🔲 Phase 4 | |
-| S3 model artifact storage | 🔲 Phase 4 | |
+| IAM user — abhinavtadi-dev (Phase 3) | ✅ Done | Scoped policies; root account not used for day-to-day work |
+| ECR image push | ✅ Done | Single-manifest image, arm64, verified via `docker manifest inspect` |
+| Lambda function | ✅ Done | arm64, 1769MB/60s — see DECISIONS.md for cold-start sizing rationale |
+| API Gateway HTTP API | ✅ Done | Live: `https://8456ksu3u8.execute-api.us-east-1.amazonaws.com/predict` |
+| S3 model artifact storage | ✅ Done | s3://fraud-triage-model-179265444220/model/ — model.ubj, model_config.json, category_maps.json |
 | Streamlit demo | 🔲 Phase 5 | Hosting on Streamlit Community Cloud, not AWS |
 | DynamoDB prediction logging | 🔲 Phase 7 | |
 | GitHub Actions CI/CD | 🔲 Stretch goal | Redeploys Lambda on push to main |
@@ -115,15 +125,40 @@ curl -X POST http://localhost:8000/predict \
   -d '{"card4": "visa"}'
 ```
 
+Run the test suite:
+
+```bash
+pytest tests/test_preprocess.py -v
+```
+
 The dataset isn't in this repo — download from [Kaggle](https://www.kaggle.com/c/ieee-fraud-detection) and place in `data/` to re-run training.
+
+---
+
+## Test the Live Endpoint
+
+Same requests, against the actual deployed AWS infrastructure instead of a local server:
+
+```bash
+# Minimal valid request
+curl -X POST https://8456ksu3u8.execute-api.us-east-1.amazonaws.com/predict \
+  -H "Content-Type: application/json" \
+  -d '{"TransactionAmt": 150.0}'
+
+# Deliberately malformed — TransactionAmt is required, this omits it
+curl -i -X POST https://8456ksu3u8.execute-api.us-east-1.amazonaws.com/predict \
+  -H "Content-Type: application/json" \
+  -d '{"card4": "visa"}'
+# Expect a clean 422 with a Pydantic validation body, not a 500
+```
 
 ---
 
 ## What I'd Do Next
 
 - **Drift detection** — a scheduled Lambda comparing the last 7 days of logged inputs against the training distribution. Not built; the design is in DECISIONS.md.
-- **Least-privilege IAM** — current policies are broader than they need to be. Fine for a portfolio project, would tighten before anything touched production.
-- **Infrastructure as code** — the Phase 4 deployment is CLI-based. Terraform would make it reproducible and version-controlled.
+- **Least-privilege IAM** — current policies are broader than they need to be, and didn't even cover everything needed (creating the Lambda execution role required a one-time root-console exception, confirmed via CloudTrail — see DECISIONS.md). Fine for a portfolio project, would tighten and complete before anything touched production.
+- **Infrastructure as code** — Phase 4 was done via AWS CLI and console, step by step. It worked, but surfaced real gotchas that IaC would catch earlier or avoid entirely (a shell-quoting bug that silently corrupted image tags twice, a Lambda-incompatible manifest format from Docker's default build behavior). Terraform or CDK would make this reproducible, version-controlled, and less exposed to this class of manual-process error.
 
 ---
 

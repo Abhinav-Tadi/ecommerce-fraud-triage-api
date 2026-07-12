@@ -3,7 +3,7 @@
 ---
 
 ## Problem & Dataset
-
+fff
 **Problem:** Predict whether a card-not-present e-commerce transaction is fraudulent, framed as flagging high-risk transactions for manual review rather than emitting a raw probability score.
 
 **Dataset:** IEEE-CIS Fraud Detection (Kaggle, 2019), provided by Vesta Corporation.
@@ -102,6 +102,22 @@ The integer-to-string mappings are saved as model/category_maps.json. Without th
 
 ---
 
+## Categorical Encoding — Inference-Time Hardening (Phase 4 Pre-Deployment Audit)
+
+Found during a pre-deployment audit, before anything shipped: `scripts/preprocess.py`'s categorical matching was exact-case with no type bridging. Fields accepted via the schema's `extra="allow"` (M1-M9, id_35-id_38, id_12/15/16/23/28/29/34, card4, card6, ProductCD, DeviceType, etc.) get zero type coercion from Pydantic — a caller sending `"id_35": true` (the natural JSON representation of a boolean) or `"card4": "Visa"` (natural capitalization) would silently resolve to NaN. Not an error — a quietly dropped feature, with no signal to the caller that anything went wrong.
+
+Fix: a case-insensitive lookup table (`_CATEGORY_MAPS_CI`) built once at module load, with explicit Python `bool` → `"t"`/`"f"` bridging matching the string convention training actually used. Verified empirically — not assumed — that JSON `true`/`false` survives `TransactionInput.model_validate_json().model_dump()` as Python `bool` rather than `str`.
+
+`DeviceInfo` excluded from case-insensitive matching (`_CASE_SENSITIVE_COLUMNS`): lowercasing its 1,786 raw values collapses 7 genuinely distinct pairs onto the same key (ALCATEL/Alcatel, DASH/Dash, ILIUM/Ilium, MI/Mi, Moto/moto, STELLAR/Stellar, Vivo/vivo — confirmed via a one-off diagnostic script against `category_maps.json`, not guessed at). No principled way to pick a winner within a colliding pair, so left exact-match, matching original pre-fix behavior. DeviceInfo doesn't appear anywhere in feature importance — a real correctness gap, but not one that moves this model's numbers.
+
+The collision guard (`RuntimeError` at import time if lowercasing changes any non-excluded column's unique-value count) is self-checking against future retrains: `tests/test_preprocess.py::test_only_known_column_has_case_collisions` re-derives the collision set from the live `category_maps.json` on every test run and fails loudly if it ever disagrees with the hardcoded exclusion set, rather than letting a future retrain silently invalidate an assumption baked in today.
+
+Known, now-covered gap: the bool-bridge exists for case-insensitive columns (3a) and was also added to the case-sensitive path (3b) as a defensive measure — tries both "T"/"t" against whichever the actual mapping contains, rather than assuming a case convention for a column that doesn't exist yet. Covered by a synthetic, monkeypatch-based test, since no real column today exercises this combination directly.
+
+Full suite: 13 tests, `tests/test_preprocess.py`, all passing.
+
+---
+
 ## TransactionDT — Time Feature Engineering
 
 TransactionDT is a seconds offset from an undisclosed Vesta reference point. Raw, it's a monotonically increasing index — not a useful feature. It's dropped from the feature set.
@@ -181,7 +197,7 @@ Lambda and API Gateway sit on AWS's permanent Always Free allowances (1M Lambda 
 
 SageMaker was also rejected: same credit-pool problem, and its free-tier allowances were designed for the old 12-month free model.
 
-Cold starts are a known limitation — Lambda adds latency on the first request after an idle period. Acceptable for a portfolio demo. Provisioned concurrency would fix it in production.
+Cold starts are a known limitation — Lambda adds latency on the first request after an idle period. Acceptable for a portfolio demo. Provisioned concurrency would fix it in production. See "Lambda Cold Start" below for what this actually measured out to and how memory/timeout were sized against it.
 
 The Streamlit frontend is hosted separately to remove all billing risk from the UI layer. It's a deliberate infrastructure decision.
 
@@ -196,6 +212,10 @@ The Streamlit frontend is hosted separately to remove all billing risk from the 
 - Region: us-east-1. Originally set to ap-south-2 (Hyderabad), which is an opt-in region — STS calls returned InvalidClientTokenId even with valid credentials. Switched to us-east-1.
 - Billing alert: $1 monthly cost budget, 100% actual-spend alert, email configured before any resource was created
 
+**Phase 4 gap found:** none of the above policies grant iam:CreateRole or iam:AttachRolePolicy — confirmed directly against AWS's published AWSLambda_FullAccess policy document, which grants lambda:*, a handful of read-only IAM actions (GetRole, ListRoles, etc.), and a conditioned iam:PassRole, but no role-creation permissions. This blocked the very first Phase 4 step: creating a Lambda execution role.
+
+Resolved with a single, one-time exception: created fraud-triage-lambda-execution-role via the root console (MFA already enabled, no access keys ever generated for root) rather than permanently widening abhinavtadi-dev's policy set. Confirmed via CloudTrail (CreateRole, Username: root, 2026-07-07) rather than assumed from the role's later existence. Since AWSLambda_FullAccess already grants iam:PassRole, once the role existed, abhinavtadi-dev could pass it to the Lambda function with zero additional standing permissions — the exception was narrow and one-time, not a lasting change to the dev user's footprint.
+
 ---
 
 ## Container Architecture & Base Image
@@ -203,6 +223,10 @@ The Streamlit frontend is hosted separately to remove all billing risk from the 
 Building for linux/arm64 — Docker Desktop on Apple Silicon defaults to the host architecture. This has one hard consequence at deployment: the Lambda function must be created with `--architectures arm64`. Lambda's default is x86_64. An arm64 image pushed to an x86_64 function deploys without error and fails at invoke time — not at deployment, at invocation. Easy to miss if you don't know to look for it.
 
 Base image: switched from `public.ecr.aws/lambda/python:3.11` (Amazon Linux 2, glibc 2.26) to `public.ecr.aws/lambda/python:3.12` (Amazon Linux 2023, glibc 2.34). The 3.11 image produced an XGBoost glibc warning at every cold start — XGBoost dropped support for glibc < 2.28 after May 2025. The 3.12 image eliminates the warning. All pinned packages resolved as prebuilt aarch64 wheels on 3.12 with no source compilation needed.
+
+**Phase 4 addendum — the arm64 build had to become explicit, not implicit.** The paragraph above describes Docker Desktop defaulting to arm64 on Apple Silicon — correct, but silent. Made explicit with `docker build --platform linux/arm64 ...` on every build going forward: an implicit default only works as long as the build always runs on this exact machine. A future build on a different-architecture host — a teammate's Intel Mac, or an x86_64 GitHub Actions runner if Phase 6 CI/CD gets built — would silently produce an x86_64 image, push without error, and fail only at Lambda invoke time, not at build or push time.
+
+**Phase 4 addendum — Docker's default build output is incompatible with Lambda.** Since Buildx v0.10, `docker build` attaches a provenance attestation by default (opt-out, not opt-in), producing an OCI image index — a manifest list wrapping the real single-platform manifest plus a separate attestation manifest. Lambda only accepts a plain single-platform manifest and rejects the index outright at `create-function`, with an unsupported media-type error. This is a known, still-open issue (tracked publicly since January 2023), not a recent regression. Fixed with `--provenance=false --sbom=false` at build time — confirmed via `docker manifest inspect`, which shows `config` + `layers` directly, no `manifests` array wrapping them.
 
 ---
 
@@ -220,7 +244,29 @@ The explicit `iteration_range=(0, _BEST_ITERATION + 1)` in inference.py is unaff
 
 Mangum 0.17.0 inspects the event structure to determine which handler to use. The v1 test payload format — `httpMethod` at the top level, no `requestContext` — doesn't match any recognized pattern and throws `RuntimeError: unable to infer a handler`.
 
-The correct format for local container testing is HTTP API v2: `version: "2.0"` and `routeKey` at the top level, with the HTTP method nested inside `requestContext.http.method`. This matches the actual event format that API Gateway HTTP API sends in production — not a workaround, just the right format.
+The correct format for local container testing is HTTP API v2: `version: "2.0"` and `routeKey` at the top level, with the HTTP method nested inside `requestContext.http.method`. This matches the actual event format that API Gateway HTTP API sends in production — not a workaround, just the right format. A complete, reusable v2 event fixture is kept at `test-event.json`, built against the full documented shape (not just the fields one specific traceback happened to name) after an incomplete hand-built payload caused a `KeyError: 'sourceIp'` against a real Mangum parse.
+
+---
+
+## Lambda Cold Start — Init Phase Ceiling & Sizing
+
+Every Lambda function gets a hard, non-configurable 10-second window for its Init phase — independent of the function's configured timeout, and not something any setting can extend. If Init doesn't finish in that window, Lambda retries it, but folds the retry into the invocation itself, now counted against whatever timeout *is* configured.
+
+At the initial 1024MB/30s configuration, this dependency stack — pandas, numpy, scipy, scikit-learn, xgboost, unmarshaling a ~41MB / ~10,000-tree model — didn't finish even on the retry: both the mandatory first attempt (10s) and the retry (30s) timed out, and the handler code was never reached.
+
+Moved to 1769MB/60s. 1769MB is AWS's documented threshold for one full vCPU — chosen deliberately, not as a round-number guess, since Init here is CPU-bound unmarshaling and import work, not memory-bound (peak usage never exceeded ~450MB even at 1769MB allocated). Cold start now reliably completes within the mandatory 10-second window on the retry; a subsequent invocation showed no timeout at all.
+
+Actual numbers observed, not estimated: `Init Duration: 7005.82 ms` on a genuine cold start at 1769MB (versus timing out entirely at 1024MB/30s). Warm-invocation `Duration: 278.35 ms`.
+
+---
+
+## Deploy Scripting — zsh Colon-Modifier Gotcha
+
+zsh applies history-style colon modifiers (`:l` lowercase, `:t` tail, `:u` uppercase, etc.) to a bare `$var` reference — no braces required — whenever the variable is immediately followed by a colon and a letter matching a real modifier. `$REPO:latest` parsed as `$REPO` plus the `:l` modifier plus literal trailing text `atest`, since `:l` is lowercase and "latest" starts with `l`. Both Docker and ECR accepted the resulting mangled tag name without complaint, so this failed silently rather than with a clear error the first two times it happened.
+
+Fix: every variable reference in deploy commands now uses explicit braces (`${REPO}`, `${ACCOUNT_ID}`, etc.), which sidesteps the modifier-parsing behavior entirely per zsh's own documented exceptions list.
+
+Separately: shell variables set with bare `VAR=value` (not `export`) don't survive into a new terminal tab or window, and `export`ed variables don't survive into a *different* session either — both bit this project during deployment. Fixed by persisting deploy variables in a gitignored `.env.deploy` file, sourced explicitly at the start of every session (`source .env.deploy`), with a verification echo immediately after, every time — not assumed.
 
 ---
 
