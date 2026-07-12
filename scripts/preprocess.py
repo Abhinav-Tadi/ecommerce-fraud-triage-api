@@ -1,5 +1,5 @@
 """
-preprocess.py — single source of truth for feature transformation.
+preprocess.py
 
 Called identically at training time (notebook) and inference time (app/inference.py).
 Any divergence between those two paths is reverse leakage.
@@ -7,8 +7,7 @@ Any divergence between those two paths is reverse leakage.
 Key design decisions:
 - Category maps loaded once at import, not per-request (saves ~5ms per call)
 - Missing features -> NaN; XGBoost handles NaN natively via learned default directions
-- TransactionDT is NOT an API input field; hour_of_day and day_of_week_proxy are
-  computed here from it if provided
+- TransactionDT is not an API input field; hour_of_day and day_of_week_proxy are computed here from it if provided
 - Unseen categorical values (e.g. new email domains post-training) -> NaN
 """
 
@@ -28,11 +27,9 @@ with open(_CONFIG_PATH) as f:
 with open(_MAPS_PATH) as f:
     _CATEGORY_MAPS = json.load(f)
 
-# Columns excluded from case-insensitive matching: raw values collide when
-# lowercased (confirmed for DeviceInfo — 1786 raw values, 1779 unique once
-# lowercased). Case-sensitive exact match only, identical to pre-fix
-# behavior. If a future retrain trips this guard on a DIFFERENT column,
-# add it here — do not silently auto-catch it and move on.
+# Columns excluded from case-insensitive matching: raw values collide when lowercased (confirmed for DeviceInfo — 1786 raw values, 1779 unique once
+# lowercased). Case-sensitive exact match only, identical to pre-fix behavior. If a future retrain trips this guard on a different column,
+# add it here.
 _CASE_SENSITIVE_COLUMNS = {"DeviceInfo"}
 
 _CATEGORY_MAPS_CI: dict = {}
@@ -68,14 +65,13 @@ def preprocess_input(raw: dict) -> pd.DataFrame:
     """
     row: dict = {}
 
-    # 1. TransactionAmt: log1p transform
-    #    Training applied this; inference must apply it identically.
+    # TransactionAmt: log1p transform
+    # Training applied this; inference must apply it identically.
     amt = raw.get("TransactionAmt")
     row["TransactionAmt"] = np.log1p(float(amt)) if amt is not None else np.nan
 
-    # 2. Time features: derived from TransactionDT, not passed directly.
-    #    TransactionDT is a seconds-offset from an undisclosed Vesta reference point.
-    #    hour_of_day and day_of_week_proxy are what the model actually sees.
+    # Time features: derived from TransactionDT, not passed directly.
+    # TransactionDT is a seconds-offset from an undisclosed Vesta reference point.
     dt = raw.get("TransactionDT")
     if dt is not None:
         dt = float(dt)
@@ -85,10 +81,10 @@ def preprocess_input(raw: dict) -> pd.DataFrame:
         row["hour_of_day"]       = np.nan
         row["day_of_week_proxy"] = np.nan
 
-    # 3. Categorical features: apply saved ordinal mappings.
-    #    Unseen values (new email domains, new device types) -> NaN.
-    #    XGBoost uses its learned default branch direction for NaN.
-    # 3a. Case-insensitive columns (everything except _CASE_SENSITIVE_COLUMNS).
+    # Categorical features: apply saved ordinal mappings.
+    # Unseen values (new email domains, new device types) -> NaN.
+    # XGBoost uses its learned default branch direction for NaN.
+    # Case-insensitive columns (everything except _CASE_SENSITIVE_COLUMNS).
     for col, mapping_ci in _CATEGORY_MAPS_CI.items():
         val = raw.get(col)
         if val is None:
@@ -100,11 +96,8 @@ def preprocess_input(raw: dict) -> pd.DataFrame:
             val_str = str(val).strip().lower()
             row[col] = float(mapping_ci[val_str]) if val_str in mapping_ci else np.nan
 
-    # 3b. Case-sensitive exceptions. Exact match only, EXCEPT for the bool
-    #     bridge below — a future column that's both case-colliding AND
-    #     boolean-valued would otherwise silently lose bool support with
-    #     nothing to catch it, the same class of gap 3a's fix closed for
-    #     every other column.
+    # Case-sensitive exceptions. Exact match only, except for the bool bridge below — a future column that's both case-colliding and
+    # boolean-valued would otherwise silently lose bool support with nothing to catch it, the same class of gap closed for every other column.
     for col in _CASE_SENSITIVE_COLUMNS:
         mapping = _CATEGORY_MAPS[col]
         val = raw.get(col)
@@ -118,7 +111,7 @@ def preprocess_input(raw: dict) -> pd.DataFrame:
             val_str = str(val).strip()
             row[col] = float(mapping[val_str]) if val_str in mapping else np.nan
 
-    # 4. All remaining numeric features: pass through.
+    # All remaining numeric features
     _handled = (
         {"TransactionAmt", "TransactionDT", "hour_of_day", "day_of_week_proxy"}
         | set(_CATEGORY_MAPS)
@@ -135,7 +128,7 @@ def preprocess_input(raw: dict) -> pd.DataFrame:
             except (TypeError, ValueError):
                 row[col] = np.nan  # Defensive: bad type -> NaN, not crash
 
-    # 5. Build DataFrame with exactly the features the model expects, in order.
-    #    Columns not yet in `row` are filled as NaN.
+    # Build DataFrame with exactly the features the model expects, in order.
+    # Columns not yet in `row` are filled as NaN.
     df = pd.DataFrame([{col: row.get(col, np.nan) for col in FEATURE_COLS}])
     return df[FEATURE_COLS]

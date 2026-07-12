@@ -1,9 +1,8 @@
 """
-inference.py — model loading and prediction.
+inference.py - model loading and prediction.
 
-Model and config are loaded once at module import (Lambda cold start),
-not on every request. Loading a ~41 MB XGBoost model per-request would
-make the service unusable.
+Model and config are loaded once at module import (Lambda cold start), not on every request. 
+Loading a ~41 MB XGBoost model per-request would make the service unusable.
 """
 
 import json

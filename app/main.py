@@ -1,5 +1,5 @@
 """
-main.py — FastAPI application.
+main.py - FastAPI application.
 """
 
 from fastapi import FastAPI

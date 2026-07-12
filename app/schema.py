@@ -1,5 +1,5 @@
 """
-schema.py — Pydantic request/response models.
+schema.py - Pydantic request/response models.
 
 Design: TransactionAmt is the only required field. All others are optional; missing values become NaN in preprocessing, 
 which XGBoost handles natively.
