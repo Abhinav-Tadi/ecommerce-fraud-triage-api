@@ -113,8 +113,6 @@ The collision guard (`RuntimeError` at import time if lowercasing changes any no
 
 Known, now-covered gap: the bool-bridge exists for case-insensitive columns (3a) and was also added to the case-sensitive path (3b) as a defensive measure — tries both "T"/"t" against whichever the actual mapping contains, rather than assuming a case convention for a column that doesn't exist yet. Covered by a synthetic, monkeypatch-based test, since no real column today exercises this combination directly.
 
-Full suite: 13 tests, `tests/test_preprocess.py`, all passing.
-
 ---
 
 ## TransactionDT — Time Feature Engineering
@@ -245,6 +243,8 @@ Mangum 0.17.0 inspects the event structure to determine which handler to use. Th
 
 The correct format for local container testing is HTTP API v2: `version: "2.0"` and `routeKey` at the top level, with the HTTP method nested inside `requestContext.http.method`. This matches the actual event format that API Gateway HTTP API sends in production — not a workaround, just the right format. A complete, reusable v2 event fixture is kept at `test-event.json`, built against the full documented shape (not just the fields one specific traceback happened to name) after an incomplete hand-built payload caused a `KeyError: 'sourceIp'` against a real Mangum parse.
 
+This lesson had to be re-learned once, post-launch: a hand-built local invoke event for verifying the TransactionAmt fix (see below) recreated the exact same `KeyError: 'sourceIp'`, by reconstructing the event shape from memory instead of reusing the fixture. Confirmed the failure was purely in the test harness, not the app — Mangum's own request parsing throws before the FastAPI app ever runs. Going forward: copy `test-event.json` and swap only the `body` field for local invokes; never hand-build the event structure.
+
 ---
 
 ## Lambda Cold Start — Init Phase Ceiling & Sizing
@@ -257,6 +257,8 @@ Moved to 1769MB/60s. 1769MB is AWS's documented threshold for one full vCPU — 
 
 Actual numbers observed, not estimated: `Init Duration: 7005.82 ms` on a genuine cold start at 1769MB (versus timing out entirely at 1024MB/30s). Warm-invocation `Duration: 278.35 ms`.
 
+Note: a local `docker run` test of the Lambda Runtime Interface Emulator will report `Memory Size: 3008 MB` in its REPORT line regardless of the function's real configured memory — that's Docker Desktop's default local resource grant to the emulator container, unrelated to the actual Lambda's 1769MB setting or billing. Don't mistake it for configuration drift.
+
 ---
 
 ## Deploy Scripting — zsh Colon-Modifier Gotcha
@@ -266,6 +268,52 @@ zsh applies history-style colon modifiers (`:l` lowercase, `:t` tail, `:u` upper
 Fix: every variable reference in deploy commands now uses explicit braces (`${REPO}`, `${ACCOUNT_ID}`, etc.), which sidesteps the modifier-parsing behavior entirely per zsh's own documented exceptions list.
 
 Separately: shell variables set with bare `VAR=value` (not `export`) don't survive into a new terminal tab or window, and `export`ed variables don't survive into a *different* session either — both bit this project during deployment. Fixed by persisting deploy variables in a gitignored `.env.deploy` file, sourced explicitly at the start of every session (`source .env.deploy`), with a verification echo immediately after, every time — not assumed.
+
+---
+
+## Frontend / Demo Design (Phase 5)
+
+**Hosting:** Streamlit Community Cloud, not Hugging Face Spaces — no reason to deviate from the original plan; keeps the frontend fully off AWS, so nothing about the UI layer can affect the AWS bill.
+
+**Live demo:** https://ecommerce-fraud-triage-api-f47dpfknvoth67u5b8hcoy.streamlit.app/
+
+**Why the guided form doesn't expose most of the model's 422 features:** V258 and V201 alone are 33.3% of the model's feature importance (24.7% + 8.6%), and neither is human-interpretable — Vesta never disclosed what they measure, and their value ranges aren't public. Exposing only the ~8 legible fields (amount, product code, card network/type, purchaser email domain, device type, hour-of-day, day-cycle-position) means every demo submission holds the two most decisive features constant at "missing." This is disclosed directly in the app's own UI copy, not hidden.
+
+Confirmed empirically, not just argued theoretically: two presets built to look meaningfully different — "Everyday small purchase" ($42.50, gmail.com, visa debit, 2pm) and "Late-night higher-value order" ($480, anonymous.com, Discover credit, mobile, 3am) — scored 2.5e-7 and 1.35e-6 respectively against the 9.57% operating threshold. Both are effectively zero. The human-legible fields alone cannot move this model off a near-zero baseline, because the features doing the actual work are missing in both cases.
+
+**Post-deployment stress test (live URL), escalating TransactionAmt across four orders of magnitude ($89.99 → $906 → $40,080 → $400,000) while also varying product/network/email:** all four returned prediction=0, probabilities between 4.3e-8 and 9.85e-7. Back-calculating the model's underlying score from each probability (logit(p) ≈ ln(p) at this scale) shows the actual score moved by only ~3 units of log-odds across the whole test — the "orders of magnitude" swings in probability are mostly an artifact of viewing a nearly-flat score through an exponential transform, not evidence the visible fields are doing meaningful work. Multiple fields changed per test, not one at a time, so this confirms the aggregate effect stays tiny; it doesn't isolate any single field's individual contribution.
+
+The $400,000 test is a distinct limitation from the missing-features one: training data topped out at $31,937, so this input is >12x beyond anything the model saw during training — whatever it returns there is extrapolation, not a validated prediction. (This same stress test is what surfaced the missing TransactionAmt lower-bound validation — see the dedicated section below.)
+
+Corrected an earlier claim while reviewing this: hour_of_day, the stronger of the two time features kept in the demo, doesn't appear in the model's top-20 feature importances at all (cutoff: V317, 0.45%). Real marginal signal in raw EDA (4.6x fraud-rate swing), minor standalone contribution once the model has 400+ other features to draw on. Worth being precise about that distinction — "better than a very weak signal" isn't "a strong one."
+
+**day_of_week_proxy included despite being weak** (3.15%-3.72% fraud rate range vs. hour-of-day's 4.6x swing): kept because a real transaction always has a computable value for it; defaulting it to missing in every demo submission would be less honest than including a low-signal control. The dataset doesn't disclose which proxy value maps to which real weekday, so the UI doesn't claim one either.
+
+**TransactionDT is synthesized, not asked for directly:** it has no real calendar meaning (offset from an undisclosed Vesta reference point), so the UI exposes hour-of-day and day-cycle-position sliders and reconstructs TransactionDT = day_proxy * 86400 + hour * 3600 to reproduce the two engineered features the model was actually trained on.
+
+**Raw JSON tab:** lets a technical visitor send the full 422-feature payload (extra="allow") directly, not just the curated guided fields — demonstrates the actual API contract for anyone who wants to see past the simplified form.
+
+**Logic split into fraud_demo_logic.py, separate from streamlit_app.py — forced by a real bug, not a style choice.** Streamlit scripts execute their entire top-level body as a side effect of being imported (no `__main__` guard, by convention). An early test file imported `build_payload` directly from streamlit_app.py to unit-test it, which forced the whole UI script to execute once, bare, with no script-run context attached — and that corrupted Streamlit's internal form-tracking state for every subsequent `AppTest` run of the same file within the same process. Symptom: `StreamlitInvalidFormCallbackError` on a widget that was not textually inside any `st.form()`. Confirmed by direct A/B test — clean when nothing imports the script as a plain module first, broken the instant something does, regardless of where the widget actually sits in the layout. Fix: all logic with zero `st.*` calls (payload construction, presets, the network call, float parsing) moved to fraud_demo_logic.py, which is safe to import from anywhere including tests. streamlit_app.py imports from it and does nothing but render. Presets apply via a manual session_state check + `st.rerun()` rather than an `on_change` callback inside a form, to avoid depending on form-nesting conventions at all.
+
+**A test that asserted "the network call fails" instead of mocking it was itself environment-dependent** — passed in a sandbox with no route to AWS, failed the moment it ran on a machine with real internet access, because the live endpoint actually worked and returned a real prediction (a success message) instead of an error. Fixed by mocking `fraud_demo_logic.call_predict` directly for each of the four response branches (flagged, passed, timeout, unexpected status) rather than asserting anything about what the network does. A separate, explicitly opt-in test (`RUN_LIVE_ENDPOINT_TEST=1 pytest ...`) hits the real deployed endpoint and is skipped by default in normal test runs, since it depends on live infrastructure rather than just this repo's code.
+
+**Current status:** Deployed and live. 16 tests in demo/test_streamlit_app.py, all passing (15 always-on + 1 opt-in live-endpoint check). Confirmed working end-to-end four separate ways: automated tests against a mocked API, an automated test against the real live API, manual browser testing against the real live API, and a post-deployment stress test pushing inputs to extremes. Phase 5 is complete.
+
+---
+
+## TransactionAmt Lower-Bound Validation (Post-Launch Fix)
+
+Found via manual stress-testing against the live, deployed demo — not a code review catch. Pushing TransactionAmt to -5000 was accepted by the API with no complaint.
+
+**Fixed:** `app/schema.py` now declares `TransactionAmt: float = Field(gt=0)`. Two independent reasons, not one:
+1. Numerical: `np.log1p(-1)` is exactly `-inf`, and `np.log1p(x)` for `x < -1` is `nan`. An unvalidated negative amount previously reached the model as a corrupted number instead of being rejected at the API boundary.
+2. Business logic: the training data's observed minimum was $0.251 (see EDA Findings) — the model never saw a zero or negative amount, so nothing meaningful could come from scoring one regardless of the numerics. `Field(gt=0)` rejects 0 too, not just negatives.
+
+7 new tests added to `tests/test_preprocess.py` (20 total, up from 13): the exact -1 boundary, zero, small positive, and regression checks confirming normal requests and the pre-existing missing-field validation are unaffected.
+
+Verified three ways before considering this done: direct Pydantic construction, a full FastAPI `TestClient` round-trip, and the live deployed endpoint post-redeploy. `curl` against the real API with `TransactionAmt: -5000` returns `HTTP 422` with body `{"type":"greater_than","msg":"Input should be greater than 0","input":-5000,"ctx":{"gt":0.0}}`; `TransactionAmt: 150.0` still returns `HTTP 200` with a normal prediction (probability 1.34e-5), confirming the constraint didn't affect ordinary traffic.
+
+Local container testing hit its own, separate, already-known issue on the way there — see the addendum in "Mangum Local Test Event Format" above.
 
 ---
 
