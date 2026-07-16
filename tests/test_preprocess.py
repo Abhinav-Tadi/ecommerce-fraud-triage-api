@@ -6,9 +6,11 @@ Run: pytest tests/test_preprocess.py -v
 import json
 import math
 from pathlib import Path
+import numpy as np
+import pytest
 from collections import defaultdict
+from pydantic import ValidationError
 import scripts.preprocess as pp
-
 from scripts.preprocess import preprocess_input, _CASE_SENSITIVE_COLUMNS
 from app.schema import TransactionInput
 
@@ -105,3 +107,44 @@ def test_case_sensitive_column_bool_bridge_tries_both_cases(monkeypatch):
 
     assert row_true["V1"].iloc[0] == 1.0
     assert row_false["V1"].iloc[0] == 0.0
+
+# TransactionAmt positivity constraint (Field(gt=0) in schema.py)
+# Added after a manual stress test sent TransactionAmt=-5000 through the live API. preprocess.py applies np.log1p(TransactionAmt); log1p(-1) is exactly
+# -inf and log1p(x) for x < -1 is nan, so an unvalidated negative amount reaches the model as a corrupted number instead of being rejected at the
+# API boundary. Fixed at the schema layer, not the preprocessing layer, so the caller gets a clean 422 instead of a silently wrong prediction.
+
+def test_log1p_confirms_why_the_constraint_is_needed():
+    assert np.log1p(-1) == -np.inf
+    assert math.isnan(np.log1p(-5000))
+
+def test_negative_transaction_amt_rejected():
+    with pytest.raises(ValidationError) as exc_info:
+        TransactionInput(TransactionAmt=-5000)
+    assert exc_info.value.errors()[0]["type"] == "greater_than"
+
+def test_transaction_amt_at_negative_one_rejected():
+    # The exact boundary value where log1p flips from "finite negative" to -inf
+    with pytest.raises(ValidationError):
+        TransactionInput(TransactionAmt=-1)
+
+def test_zero_transaction_amt_rejected():
+    # log1p(0) == 0 is numerically harmless, but a $0 transaction has no business meaning here and the model never saw one in training
+    # (observed minimum was $0.251).
+    with pytest.raises(ValidationError):
+        TransactionInput(TransactionAmt=0)
+
+def test_small_positive_transaction_amt_accepted():
+    txn = TransactionInput(TransactionAmt=0.01)
+    assert txn.TransactionAmt == 0.01
+
+def test_normal_transaction_amt_still_accepted():
+    # Regression check: the constraint must not affect ordinary requests
+    txn = TransactionInput(TransactionAmt=150.0)
+    assert txn.TransactionAmt == 150.0
+
+def test_missing_transaction_amt_still_rejected_as_before():
+    # Confirms the new constraint didn't accidentally change the pre-existing
+    # required-field behavior
+    with pytest.raises(ValidationError) as exc_info:
+        TransactionInput(card4="visa")
+    assert exc_info.value.errors()[0]["type"] == "missing"
