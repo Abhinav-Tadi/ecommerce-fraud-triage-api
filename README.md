@@ -1,4 +1,14 @@
-See "Test the Live Endpoint" below for copy-pasteable examples, including deliberately malformed and invalid requests.
+# E-Commerce Fraud Triage API
+
+## Live Demo
+
+**[Try it live →](https://ecommerce-fraud-triage-api-f47dpfknvoth67u5b8hcoy.streamlit.app/)** — calls a real XGBoost model deployed on AWS Lambda behind API Gateway. No local model, no mock data.
+
+## What This Is
+
+A real-time fraud-triage API for card-not-present e-commerce transactions, trained on the IEEE-CIS Fraud Detection dataset (~590,540 transactions, 3.5% fraud rate, Vesta Corporation via Kaggle). An XGBoost classifier (PR-AUC 0.8691, 422 features) scores each transaction and flags it for manual review rather than returning a bare probability, at an operating threshold tuned for ~85% recall / 67% precision based on the asymmetric cost of a missed fraud (chargeback + lost goods) versus a false alarm (one manual review). The model is packaged as a Dockerized FastAPI service running on AWS Lambda behind API Gateway; the Streamlit frontend is hosted separately on Streamlit Community Cloud to keep the entire UI layer off AWS billing.
+
+Live API endpoint: `https://8456ksu3u8.execute-api.us-east-1.amazonaws.com/predict`. See "Test the Live Endpoint" below for copy-pasteable examples, including deliberately malformed and invalid requests.
 
 ---
 
@@ -10,7 +20,7 @@ flowchart LR
     B --> C["Lambda - Docker container"]
     C --> D["XGBoost model\nmodel.ubj"]
     C --> E["CloudWatch Logs"]
-    C --> F["DynamoDB - prediction log"]
+    C -.->|planned, not yet built| F["DynamoDB - prediction log"]
     G["S3 bucket"] -.->|model artifact versioning| C
 ```
 
@@ -39,9 +49,9 @@ Inference runs on AWS. The Streamlit frontend runs on Streamlit Community Cloud 
 | S3 model artifact storage | ✅ Done | s3://fraud-triage-model-179265444220/model/ — model.ubj, model_config.json, category_maps.json |
 | Streamlit demo (demo/streamlit_app.py) | ✅ Done | Live at https://ecommerce-fraud-triage-api-f47dpfknvoth67u5b8hcoy.streamlit.app/ — confirmed against the real AWS endpoint, including a post-deployment stress test |
 | Demo test suite (demo/test_streamlit_app.py) | ✅ Done | 16 tests: pytest + Streamlit AppTest. Network calls mocked for 15 of them; one explicit opt-in test (`RUN_LIVE_ENDPOINT_TEST=1`) hits the live endpoint directly |
-| DynamoDB prediction logging | 🔲 Phase 7 | |
-| GitHub Actions CI/CD | 🔲 Stretch goal | Redeploys Lambda on push to main |
-| Automated drift detection | ❌ Not built | Design is documented in DECISIONS.md |
+| DynamoDB prediction logging | ❌ Not built | Deprioritized given dissertation timeline — see "What I'd Do Next" |
+| GitHub Actions CI/CD | ❌ Not built | Deprioritized given dissertation timeline — see "What I'd Do Next" |
+| Automated drift detection | ❌ Not built | Design documented in DECISIONS.md; not automated in v1 |
 
 ---
 
@@ -161,7 +171,8 @@ curl -i -X POST https://8456ksu3u8.execute-api.us-east-1.amazonaws.com/predict \
 
 ## What I'd Do Next
 
-- **Drift detection** — a scheduled Lambda comparing the last 7 days of logged inputs against the training distribution. Not built; the design is in DECISIONS.md.
+- **CI/CD** — a GitHub Actions workflow (build → push to ECR → update Lambda on every push to `main`). Explicitly skipped for v1 given the dissertation deadline. Every deploy so far has instead been a manual, verified CLI/console sequence — slower, but it's what surfaced the arm64/provenance/manifest gotchas documented in DECISIONS.md; a working pipeline built too early might have papered over them instead of forcing me to understand each one.
+- **Prediction logging & drift detection** — a DynamoDB table logging each request (input, prediction, probability, timestamp), plus a scheduled Lambda comparing the last 7 days of logged inputs against the training distribution (KS test or PSI, alert via SNS past a threshold). Neither is built; both are explicit time cuts, not oversights — full design in DECISIONS.md.
 - **Least-privilege IAM** — current policies are broader than they need to be, and didn't even cover everything needed (creating the Lambda execution role required a one-time root-console exception, confirmed via CloudTrail — see DECISIONS.md). Fine for a portfolio project, would tighten and complete before anything touched production.
 - **Infrastructure as code** — Phase 4 was done via AWS CLI and console, step by step. It worked, but surfaced real gotchas that IaC would catch earlier or avoid entirely (a shell-quoting bug that silently corrupted image tags twice, a Lambda-incompatible manifest format from Docker's default build behavior). Terraform or CDK would make this reproducible, version-controlled, and less exposed to this class of manual-process error.
 
@@ -169,7 +180,7 @@ curl -i -X POST https://8456ksu3u8.execute-api.us-east-1.amazonaws.com/predict \
 
 ## Tech Stack
 
-Python · XGBoost · scikit-learn · FastAPI · Pydantic · Docker · AWS Lambda · ECR · API Gateway · S3 · DynamoDB · CloudWatch · Streamlit
+Python · XGBoost · scikit-learn · FastAPI · Pydantic · Docker · AWS Lambda · ECR · API Gateway · S3 · CloudWatch · Streamlit
 
 ---
 
