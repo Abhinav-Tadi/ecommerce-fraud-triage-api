@@ -2,7 +2,7 @@
 
 ## Live Demo
 
-**[Try it live →](https://ecommerce-fraud-triage-api-f47dpfknvoth67u5b8hcoy.streamlit.app/)** — calls a real XGBoost model deployed on AWS Lambda behind API Gateway. No local model, no mock data.
+**[Try it live](https://ecommerce-fraud-triage-api-f47dpfknvoth67u5b8hcoy.streamlit.app/)** — calls a real XGBoost model deployed on AWS Lambda behind API Gateway. No local model, no mock data.
 
 ## What This Is
 
